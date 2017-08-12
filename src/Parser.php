@@ -32,12 +32,9 @@ use \Com\Tecnick\Pdf\Parser\Exception as PPException;
  */
 class Parser extends \Com\Tecnick\Pdf\Parser\Process\Xref
 {
-    /**
-     * Raw content of the PDF document.
-     *
-     * @var string
-     */
-    protected $pdfdata = '';
+	protected $pdf;
+
+	protected $trailer = array();
 
     /**
      * Array of PDF objects.
@@ -62,8 +59,10 @@ class Parser extends \Com\Tecnick\Pdf\Parser\Process\Xref
      *          'ignore_filter_decoding_errors'  : if true ignore filter decoding errors;
      *          'ignore_missing_filter_decoders' : if true ignore missing filter decoding errors.
      */
-    public function __construct($cfg = array())
+    public function __construct(&$pdfhandle, $cfg = array())
     {
+	    $this->pdf =& $pdfhandle;
+
         if (isset($cfg['ignore_filter_errors'])) {
             $this->cfg['ignore_filter_errors'] = (bool)$cfg['ignore_filter_errors'];
         }
@@ -74,19 +73,22 @@ class Parser extends \Com\Tecnick\Pdf\Parser\Process\Xref
      *
      * @param string $data PDF data to parse.
      */
-    public function parse($data)
+    public function parse()
     {
-        if (empty($data)) {
+	    fseek($this->pdf, 0);
+	    $block = fread($this->pdf, 1024);
+
+	    if (!$block) {
             throw new PPException('Empty PDF data.');
         }
-        // find the pdf header starting position
-        if (($trimpos = strpos($data, '%PDF-')) === false) {
+
+	    if (strpos($block, '%PDF') === false) {
             throw new PPException('Invalid PDF data: missing %PDF header.');
         }
-        // get PDF content string
-        $this->pdfdata = substr($data, $trimpos);
+
         // get xref and trailer data
         $this->xref = $this->getXrefData();
+
         // parse all document objects
         $this->objects = array();
         foreach ($this->xref['xref'] as $obj => $offset) {
@@ -95,8 +97,7 @@ class Parser extends \Com\Tecnick\Pdf\Parser\Process\Xref
                 $this->objects[$obj] = $this->getIndirectObject($obj, $offset, true);
             }
         }
-        // release some memory
-        unset($this->pdfdata);
+
         return array($this->xref, $this->objects);
     }
 
@@ -116,14 +117,29 @@ class Parser extends \Com\Tecnick\Pdf\Parser\Process\Xref
             throw new PPException('Invalid object reference: '.$obj);
         }
         $objref = $obj[0].' '.$obj[1].' obj';
+
         // ignore leading zeros
-        $offset += strspn($this->pdfdata, '0', $offset);
-        if (strpos($this->pdfdata, $objref, $offset) != $offset) {
+		fseek($this->pdf, $offset);
+		$block = fread($this->pdf, 1024);
+		$zeros = 0;
+
+		while (($final_zeros = strspn($block, '0')) == 1024)
+		{
+			$zeros += 1024;
+			$block = fread($this->pdf, 1024);
+		}
+
+		$offset += $zeros + $final_zeros;
+		$block .= fread($this->pdf, 1024);
+
+        if (strpos($block, $objref) !== 0) {
             // an indirect reference to an undefined object shall be considered a reference to the null object
             return array('null', 'null', $offset);
         }
+
         // starting position of object content
         $offset += strlen($objref);
+
         // return raw object content
         return $this->getRawIndirectObject($offset, $decoding);
     }

@@ -59,45 +59,66 @@ abstract class Xref extends \Com\Tecnick\Pdf\Parser\Process\XrefStream
         if (in_array($offset, $this->mrkoff)) {
             throw new PPException('LOOP: this XRef offset has been already processed');
         }
+
         $this->mrkoff[] = $offset;
         if ($offset == 0) {
             // find last startxref
-            if (preg_match_all(
-                '/[\r\n]startxref[\s]*[\r\n]+([0-9]+)[\s]*[\r\n]+%%EOF/i',
-                $this->pdfdata,
-                $matches,
-                PREG_SET_ORDER,
-                $offset
-            ) == 0) {
-                throw new PPException('Unable to find startxref');
-            }
-            $matches = array_pop($matches);
-            $startxref = $matches[1];
-        } elseif (($pos = strpos($this->pdfdata, 'xref', $offset)) <= ($offset + 4)) {
-            // Already pointing at the xref table
-            $startxref = $pos;
-        } elseif (preg_match('/([0-9]+[\s][0-9]+[\s]obj)/i', $this->pdfdata, $matches, PREG_OFFSET_CAPTURE, $offset)) {
-            // Cross-Reference Stream object
-            $startxref = $offset;
-        } elseif (preg_match(
-            '/[\r\n]startxref[\s]*[\r\n]+([0-9]+)[\s]*[\r\n]+%%EOF/i',
-            $this->pdfdata,
-            $matches,
-            PREG_OFFSET_CAPTURE,
-            $offset
-        )) {
-            // startxref found
-            $startxref = $matches[1][0];
+			$startxref = null;
+			$blocks_back = 1;
+			$stat = fstat($this->pdf);
+			$total = $stat['size'];
+
+			while (!isset($startxref))
+			{
+				$position = -1024 * $blocks_back;
+
+				if ($position + $total < 1)
+				{
+					break;
+				}
+
+				$blocks_back++;
+				fseek($this->pdf, $position, SEEK_END);
+				$block = fread($this->pdf, 2048);
+
+				if (preg_match('/[\r\n]{0,2}startxref[\s]*[\r\n]+([0-9]+)\s*[\r\n]+/s', $block, $m))
+				{
+					$startxref = $m[1];
+				}
+			}
+
+			if (!isset($startxref))
+			{
+		      	throw new PPException('Unable to find startxref');
+			}
         } else {
-            throw new PPException('Unable to find startxref');
-        }
+			fseek($this->pdf, $offset);
+			$block = fread($this->pdf, 1024);
+			$pos = strpos(substr($block, 0, 8), 'xref');
+
+			if ($pos <= 4)
+			{
+				// Already pointing at the xref table
+				$startxref = $pos;
+			}
+			else if (preg_match('/([0-9]+[\s][0-9]+[\s]obj)/i', $block, $m)) {
+				// Cross-Reference Stream object
+				$startxref = $offset;
+			} else {
+				throw new PPException('Unable to find startxref');
+	        }
+		}
+
         // check xref position
-        if (strpos($this->pdfdata, 'xref', $startxref) == $startxref) {
-            // Cross-Reference
-            $xref = $this->decodeXref($startxref, $xref);
+		fseek($this->pdf, $startxref);
+		$block = fread($this->pdf, 1024);
+
+        if (strpos($block, 'xref') === 0) {
+			// Cross-Reference
+			$xref = $this->decodeXref($startxref, $xref);
         } else {
-            // Cross-Reference Stream
-            $xref = $this->decodeXrefStream($startxref, $xref);
+			// Cross-Reference Stream
+			$xref = $this->decodeXrefStream($startxref, $xref);
         }
         if (empty($xref)) {
             throw new PPException('Unable to find xref');
@@ -123,43 +144,99 @@ abstract class Xref extends \Com\Tecnick\Pdf\Parser\Process\XrefStream
         // \x0C form feed (FF)
         // \x0D carriage return (CR)
         // \x20 space (SP)
-        $offset = $startxref + strspn($this->pdfdata, "\x00\x09\x0a\x0c\x0d\x20", $startxref);
+		fseek($this->pdf, $startxref);
+		$block = fread($this->pdf, 1024);
+
+		while (($length = strspn($block, "\x00\x09\x0a\x0c\x0d\x20")) == 1024)
+		{
+			$block = fread($this->pdf, 1024);
+		}
+
+		$block = substr($block, $length) . fread($this->pdf, 1024);
+
         // initialize object number
         $obj_num = 0;
-        // search for cross-reference entries or subsection
-        while (preg_match(
-            '/([0-9]+)[\x20]([0-9]+)[\x20]?([nf]?)(\r\n|[\x20]?[\r\n])/',
-            $this->pdfdata,
-            $matches,
-            PREG_OFFSET_CAPTURE,
-            $offset
-        ) > 0) {
-            if ($matches[0][1] != $offset) {
-                // we are on another section
-                break;
-            }
-            $offset += strlen($matches[0][0]);
-            if ($matches[3][0] == 'n') {
-                // create unique object index: [object number]_[generation number]
-                $index = $obj_num.'_'.intval($matches[2][0]);
-                // check if object already exist
-                if (!isset($xref['xref'][$index])) {
-                    // store object offset position
-                    $xref['xref'][$index] = intval($matches[1][0]);
-                }
-                ++$obj_num;
-            } elseif ($matches[3][0] == 'f') {
-                ++$obj_num;
-            } else {
-                // object number (index)
-                $obj_num = intval($matches[1][0]);
-            }
+		$has_match = preg_match('/([0-9]+)[\x20]([0-9]+)[\x20]?([nf]?)(\r\n|[\x20]?[\r\n])/', $block, $m, PREG_OFFSET_CAPTURE);
+
+		if ($has_match)
+		{
+			$backseek = strlen($block) - strlen($m[0][0]) - $m[0][1];
+			fseek($this->pdf, -1 * $backseek, SEEK_CUR);
+		}
+
+		while ($has_match)
+		{
+			$block = fread($this->pdf, 1024);
+
+			if ($m[3][0] == 'n')
+			{
+				// create unique object index: [object number]_[generation number]
+				$index = $obj_num.'_'.intval($m[2][0]);
+
+				// check if object already exist
+				if (!isset($xref['xref'][$index])) {
+					// store object offset position
+					$xref['xref'][$index] = intval($m[1][0]);
+				}
+				++$obj_num;
+			} elseif ($m[3][0] == 'f') {
+				++$obj_num;
+			} else {
+				// object number (index)
+				$obj_num = intval($m[1][0]);
+			}
+
+			$has_match = preg_match('/([0-9]+)[\x20]([0-9]+)[\x20]?([nf]?)(\r\n|[\x20]?[\r\n])/', $block, $m, PREG_OFFSET_CAPTURE);
+
+			if ($has_match)
+			{
+				$backseek = strlen($block) - strlen($m[0][0]) - $m[0][1];
+				fseek($this->pdf, -1 * $backseek, SEEK_CUR);
+			}
         }
+
         // get trailer data
-        if (!preg_match('/trailer[\s]*<<(.*)>>/isU', $this->pdfdata, $matches, PREG_OFFSET_CAPTURE, $offset) > 0) {
-            throw new PPException('Unable to find trailer');
-        }
-        return $this->getTrailerData($xref, $matches);
+		$trailer = '';
+
+		while (!preg_match('/trailer[\s]*<</', $block, $m, PREG_OFFSET_CAPTURE) AND strlen($block) >= 1024)
+		{
+			$block = substr($block, 1024) . fread($this->pdf, 1024);
+		}
+
+		if ($m)
+		{
+			$block = substr($block, $m[0][1] + strlen($m[0][0]));
+
+			if (!$block)
+			{
+				$block = fread($this->pdf, 1024);
+			}
+
+			while ($block AND ($pos = strpos($block, '>>')) === false)
+			{
+				$trailer .= $block;
+				$block = fread($this->pdf, 1024);
+			}
+
+			if ($pos !== false)
+			{
+				if ($pos)
+				{
+					$trailer .= substr($block, 0, $pos);
+				}
+			}
+			else
+			{
+				$trailer = '';
+			}
+		}
+
+		if (!$trailer)
+		{
+			throw new PPException('Unable to find trailer');
+		}
+
+        return $this->getTrailerData($xref, $trailer);
     }
 
     /**
@@ -170,9 +247,8 @@ abstract class Xref extends \Com\Tecnick\Pdf\Parser\Process\XrefStream
      *
      * @return array Xref and trailer data.
      */
-    protected function getTrailerData($xref, $matches)
+    protected function getTrailerData($xref, $trailer_data)
     {
-        $trailer_data = $matches[1][0];
         if (!isset($xref['trailer']) || empty($xref['trailer'])) {
             // get only the last updated version
             $xref['trailer'] = array();
