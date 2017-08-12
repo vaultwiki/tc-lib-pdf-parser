@@ -20,16 +20,17 @@ require ('../vendor/autoload.php');
 //require ('/usr/share/php/Com/Tecnick/Pdf/Parser/autoload.php');
 
 $filename = '../resources/test/example_036.pdf';
-$rawdata = file_get_contents($filename);
-if ($rawdata === false) {
-    die('Unable to get the content of the file: '.$filename);
+$pdfhandle = @fopen($filename, 'rb');
+if ($pdfhandle === false) {
+    die('Unable to read the file: '.$filename);
 }
 // configuration parameters for parser
 $cfg = array('ignore_filter_errors' => true);
 
 // parse PDF data
-$pdf = new \Com\Tecnick\Pdf\Parser\Parser($cfg);
-$data = $pdf->parse($rawdata);
+$pdf = new \Com\Tecnick\Pdf\Parser\Parser($pdfhandle, $cfg);
+$data = $pdf->parse();
+fclose($pdfhandle);
 
 // display data
 var_dump($data);
