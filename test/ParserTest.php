@@ -30,13 +30,9 @@ use PHPUnit\Framework\TestCase;
  */
 class ParserTest extends TestCase
 {
-    protected $obj = null;
-
     public function setUp()
     {
         //$this->markTestSkipped(); // skip this test
-        $cfg = array('ignore_filter_errors' => true);
-        $this->obj = new \Com\Tecnick\Pdf\Parser\Parser($cfg);
     }
     
     /**
@@ -44,9 +40,18 @@ class ParserTest extends TestCase
      */
     public function testParse($filename, $hash)
     {
-        $rawdata = file_get_contents($filename);
-        $data = $this->obj->parse($rawdata);
-        $this->assertEquals($hash, md5(serialize($data)));
+		$data = null;
+
+        if ($fh = @fopen($filename, 'rb'))
+        {
+        	$cfg = array('ignore_filter_errors' => true);
+        	$obj = new \Com\Tecnick\Pdf\Parser\Parser($fh, $cfg);
+        	$data = $obj->parse();
+			fclose($fh);
+			unset($obj);
+		}
+
+       	$this->assertEquals($hash, md5(serialize($data)));
     }
 
     public function getParseProvider()
