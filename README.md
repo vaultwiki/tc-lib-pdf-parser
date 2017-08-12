@@ -27,8 +27,9 @@
 ## Description
 
 PHP library to parse PDF documents.
-
 The initial source code has been derived from [TCPDF](<http://www.tcpdf.org>).
+
+Forked by Ted Phillips (vaultwiki) in 2017 because the original library uses too much memory for large files and results are unreliable when the file size exceeds pcre.backtrack_limit. In the original, a sample 40MB PDF required over 250MB system memory to parse; the entire PDF was being loaded into memory and duplicated several times. This fork instead parses the file in chunks of 1KB or lower. After parsing, the peak memory usage for our sample file was less than 5% of its actual file size.
 
 
 ## Getting started
